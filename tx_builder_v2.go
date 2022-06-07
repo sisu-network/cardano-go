@@ -75,7 +75,7 @@ func (tb *TxBuilderV2) AddChangeIfNeeded(changeAddr Address) error {
 
 	// Set a temporary realistic fee in order to serialize a valid transaction
 	tb.tx.Body.Fee = 200000
-	if _, err := tb.build(); err != nil {
+	if _, err := tb.build2(); err != nil {
 		return err
 	}
 
@@ -241,9 +241,6 @@ func (tb *TxBuilderV2) build() (*Tx, error) {
 	vkeyWitnsessSet := make([]VKeyWitness, len(tb.pkeys))
 	for i, pkey := range tb.pkeys {
 		publicKey := pkey.PubKey()
-		// signature := pkey.Sign(txHash[:])
-		// witness := VKeyWitness{VKey: publicKey, Signature: signature}
-
 		sig, err := pkey.Sign(txHash[:])
 		if err != nil {
 			return nil, err
@@ -256,6 +253,46 @@ func (tb *TxBuilderV2) build() (*Tx, error) {
 
 	return tb.tx, nil
 }
+
+///////// EDIT
+
+func (tb *TxBuilderV2) Build2() (*Tx, error) {
+	inputAmount, outputAmount := tb.calculateAmounts()
+	outputAmount = outputAmount.Add(NewValue(tb.tx.Body.Fee))
+
+	if inputOutputCmp := outputAmount.Cmp(inputAmount); inputOutputCmp == 1 || inputOutputCmp == 2 {
+		return nil, fmt.Errorf(
+			"insuficient input in transaction, got %v want %v",
+			inputAmount,
+			outputAmount,
+		)
+	} else if inputOutputCmp == -1 {
+		return nil, fmt.Errorf(
+			"fee too small, got %v want %v",
+			tb.tx.Body.Fee,
+			inputAmount.Sub(outputAmount),
+		)
+	}
+
+	return tb.build2()
+}
+
+func (tb *TxBuilderV2) build2() (*Tx, error) {
+	if err := tb.buildBody(); err != nil {
+		return nil, err
+	}
+
+	vkeyWitnsessSet := make([]VKeyWitness, 1)
+	for i := range tb.tx.Body.Inputs {
+		witness := VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
+		vkeyWitnsessSet[i] = witness
+	}
+	tb.tx.WitnessSet.VKeyWitnessSet = vkeyWitnsessSet
+
+	return tb.tx, nil
+}
+
+///////// END OF EDIT
 
 func (tb *TxBuilderV2) buildBody() error {
 	if tb.tx.AuxiliaryData != nil {
