@@ -2,7 +2,6 @@ package cardano
 
 import (
 	"encoding/hex"
-
 	"github.com/echovl/cardano-go/crypto"
 	"golang.org/x/crypto/blake2b"
 )
@@ -17,11 +16,11 @@ type UTxO struct {
 }
 
 type Tx struct {
-	_             struct{} `cbor:",toarray"`
-	Body          TxBody
-	WitnessSet    WitnessSet
-	IsValid       bool
-	AuxiliaryData *AuxiliaryData // or null
+	_             struct{}       `cbor:",toarray"`
+	Body          TxBody         `json:"body"`
+	WitnessSet    WitnessSet     `json:"witness_set"`
+	IsValid       bool           `json:"is_valid"`
+	AuxiliaryData *AuxiliaryData `json:"auxiliary_data"`
 }
 
 // Bytes returns the CBOR encoding of the transaction as bytes.
@@ -49,13 +48,13 @@ type WitnessSet struct {
 }
 
 type VKeyWitness struct {
-	_         struct{}      `cbor:",toarray"`
+	_         struct{}      `cbor:",toarray" json:"-"`
 	VKey      crypto.PubKey // ed25519 public key
 	Signature []byte        // ed25519 signature
 }
 
 type TxInput struct {
-	_      struct{} `cbor:",toarray"`
+	_      struct{} `cbor:",toarray" json:"-"`
 	TxHash Hash32
 	Index  uint64
 	Amount *Value `cbor:"-"`
@@ -67,7 +66,7 @@ func NewTxInput(txHash Hash32, index uint, amount *Value) *TxInput {
 }
 
 type TxOutput struct {
-	_       struct{} `cbor:",toarray"`
+	_       struct{} `cbor:",toarray" json:"-"`
 	Address Address
 	Amount  *Value
 }
@@ -78,22 +77,22 @@ func NewTxOutput(addr Address, amount *Value) *TxOutput {
 }
 
 type TxBody struct {
-	Inputs  []*TxInput  `cbor:"0,keyasint"`
-	Outputs []*TxOutput `cbor:"1,keyasint"`
-	Fee     Coin        `cbor:"2,keyasint"`
+	Inputs  []*TxInput  `cbor:"0,keyasint" json:"inputs,omitempty"`
+	Outputs []*TxOutput `cbor:"1,keyasint" json:"outputs,omitempty"`
+	Fee     Coin        `cbor:"2,keyasint" json:"fee,omitempty"`
 
 	// Optionals
-	TTL                   Uint64        `cbor:"3,keyasint,omitempty"`
-	Certificates          []Certificate `cbor:"4,keyasint,omitempty"`
-	Withdrawals           interface{}   `cbor:"5,keyasint,omitempty"` // unsupported
-	Update                interface{}   `cbor:"6,keyasint,omitempty"` // unsupported
-	AuxiliaryDataHash     *Hash32       `cbor:"7,keyasint,omitempty"`
-	ValidityIntervalStart Uint64        `cbor:"8,keyasint,omitempty"`
-	Mint                  *Mint         `cbor:"9,keyasint,omitempty"`
-	ScriptDataHash        *Hash32       `cbor:"10,keyasint,omitempty"`
-	Collateral            []TxInput     `cbor:"11,keyasint,omitempty"`
-	RequiredSigners       []AddrKeyHash `cbor:"12,keyasint,omitempty"`
-	NetworkID             Uint64        `cbor:"13,keyasint,omitempty"`
+	TTL                   Uint64        `cbor:"3,keyasint,omitempty" json:"ttl,omitempty"`
+	Certificates          []Certificate `cbor:"4,keyasint,omitempty" json:"certificates,omitempty"`
+	Withdrawals           interface{}   `cbor:"5,keyasint,omitempty" json:"withdrawals,omitempty"` // unsupported
+	Update                interface{}   `cbor:"6,keyasint,omitempty" json:"update,omitempty"`      // unsupported
+	AuxiliaryDataHash     *Hash32       `cbor:"7,keyasint,omitempty" json:"auxiliary_data_hash,omitempty"`
+	ValidityIntervalStart Uint64        `cbor:"8,keyasint,omitempty" json:"validity_interval_start,omitempty"`
+	Mint                  *Mint         `cbor:"9,keyasint,omitempty" json:"mint,omitempty"`
+	ScriptDataHash        *Hash32       `cbor:"10,keyasint,omitempty" json:"script_data_hash,omitempty"`
+	Collateral            []TxInput     `cbor:"11,keyasint,omitempty" json:"collateral,omitempty"`
+	RequiredSigners       []AddrKeyHash `cbor:"12,keyasint,omitempty" json:"required_signers,omitempty"`
+	NetworkID             Uint64        `cbor:"13,keyasint,omitempty" json:"network_id,omitempty"`
 }
 
 // Hash returns the transaction body hash using blake2b256.
