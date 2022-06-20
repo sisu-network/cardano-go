@@ -32,7 +32,7 @@ type Wallet struct {
 }
 
 // Transfer sends an amount of lovelace to the receiver address and returns the transaction hash
-func (w *Wallet) Transfer(receiver cardano.Address, amount *cardano.Value) (*cardano.Hash32, error) {
+func (w *Wallet) Transfer(receiver cardano.Address, amount *cardano.Value, metadata cardano.Metadata) (*cardano.Hash32, error) {
 	// Calculate if the account has enough balance
 	balance, err := w.Balance()
 	if err != nil {
@@ -89,6 +89,9 @@ func (w *Wallet) Transfer(receiver cardano.Address, amount *cardano.Value) (*car
 		inputAmount = inputAmount.Add(utxo.Amount)
 	}
 	builder.AddOutputs(&cardano.TxOutput{Address: receiver, Amount: amount})
+	if len(metadata) > 0 {
+		builder.AddAuxiliaryData(&cardano.AuxiliaryData{Metadata: metadata})
+	}
 
 	tip, err := w.node.Tip()
 	if err != nil {
