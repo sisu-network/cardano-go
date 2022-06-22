@@ -1,26 +1,27 @@
 package cardano
 
 import (
-	"errors"
 	"fmt"
 	"math"
 
-	"github.com/decred/dcrd/dcrec/edwards/v2"
-
+	"github.com/echovl/cardano-go/crypto"
 	"golang.org/x/crypto/blake2b"
 )
 
+// TxBuilder is a transaction builder.
 type TxBuilderV2 struct {
 	tx       *Tx
 	protocol *ProtocolParams
-	pkeys    []*edwards.PrivateKey
+	pkeys    []crypto.PrvKey
+
+	changeReceiver *Address
 }
 
 // NewTxBuilder returns a new instance of TxBuilder.
-func NewTxBuilderV2(protocol *ProtocolParams) *TxBuilderV2 {
-	return &TxBuilderV2{
+func NewTxBuilderV2(protocol *ProtocolParams) *TxBuilder {
+	return &TxBuilder{
 		protocol: protocol,
-		pkeys:    []*edwards.PrivateKey{},
+		pkeys:    []crypto.PrvKey{},
 		tx: &Tx{
 			IsValid: true,
 		},
@@ -67,15 +68,131 @@ func (tb *TxBuilderV2) Mint(asset *Mint) {
 	tb.tx.Body.Mint = asset
 }
 
-// AddChangeIfNeeded calculates the required fee for the transaction and adds
-// an aditional output for the change if there is any.
+// AddChangeIfNeeded instructs the builder to calculate the required fee for the
+// transaction and to add an aditional output for the change if there is any.
+func (tb *TxBuilderV2) AddChangeIfNeeded(changeAddr Address) {
+	tb.changeReceiver = &changeAddr
+}
+
+func (tb *TxBuilderV2) calculateAmounts() (*Value, *Value) {
+	input, output := NewValue(0), NewValue(tb.totalDeposits())
+	for _, in := range tb.tx.Body.Inputs {
+		input = input.Add(in.Amount)
+	}
+	for _, out := range tb.tx.Body.Outputs {
+		output = output.Add(out.Amount)
+	}
+	if tb.tx.Body.Mint != nil {
+		input = input.Add(NewValueWithAssets(0, tb.tx.Body.Mint.MultiAsset()))
+	}
+	return input, output
+}
+
+func (tb *TxBuilderV2) totalDeposits() Coin {
+	certs := tb.tx.Body.Certificates
+	var deposit Coin
+	if len(certs) != 0 {
+		for _, cert := range certs {
+			if cert.Type == StakeRegistration {
+				deposit += tb.protocol.KeyDeposit
+			}
+		}
+	}
+	return deposit
+}
+
+// MinFee computes the minimal fee required for the transaction.
 // This assumes that the inputs-outputs are defined and signing keys are present.
-func (tb *TxBuilderV2) AddChangeIfNeeded(changeAddr Address) error {
+func (tb *TxBuilderV2) MinFee() (Coin, error) {
+	// Set a temporary realistic fee in order to serialize a valid transaction
+	currentFee := tb.tx.Body.Fee
+	tb.tx.Body.Fee = 200000
+	if err := tb.build(); err != nil {
+		return 0, err
+	}
+	minFee := tb.calculateMinFee()
+	tb.tx.Body.Fee = currentFee
+	return minFee, nil
+}
+
+// MinCoinsForTxOut computes the minimal amount of coins required for a given transaction output.
+func (tb *TxBuilderV2) MinCoinsForTxOut(txOut *TxOutput) Coin {
+	var size uint
+	if txOut.Amount.OnlyCoin() {
+		size = 1
+	} else {
+		numAssets := txOut.Amount.MultiAsset.numAssets()
+		assetsLength := txOut.Amount.MultiAsset.assetsLength()
+		numPIDs := txOut.Amount.MultiAsset.numPIDs()
+
+		size = 6 + uint(math.Floor(
+			float64(numAssets*12+assetsLength+numPIDs*28+7)/8,
+		))
+	}
+	return Coin(utxoEntrySizeWithoutVal+size) * tb.protocol.CoinsPerUTXOWord
+}
+
+// calculateMinFee computes the minimal fee required for the transaction.
+func (tb *TxBuilderV2) calculateMinFee() Coin {
+	txBytes := tb.tx.Bytes()
+	txLength := uint64(len(txBytes))
+	return tb.protocol.MinFeeA*Coin(txLength) + tb.protocol.MinFeeB
+}
+
+// Sign adds signing keys to create signatures for the witness set.
+func (tb *TxBuilderV2) Sign(privateKeys ...crypto.PrvKey) {
+	tb.pkeys = append(tb.pkeys, privateKeys...)
+}
+
+// Reset resets the builder to its initial state.
+func (tb *TxBuilderV2) Reset() {
+	tb.tx = &Tx{IsValid: true}
+	tb.pkeys = []crypto.PrvKey{}
+	tb.changeReceiver = nil
+}
+
+// Build returns a new transaction using the inputs, outputs and keys provided.
+func (tb *TxBuilderV2) Build() (*Tx, error) {
 	inputAmount, outputAmount := tb.calculateAmounts()
 
-	// Set a temporary realistic fee in order to serialize a valid transaction
-	tb.tx.Body.Fee = 200000
-	if _, err := tb.build2(); err != nil {
+	// Check input-output value conservation
+	if tb.changeReceiver == nil {
+		totalProduced := outputAmount.Add(NewValue(tb.tx.Body.Fee))
+		if inputOutputCmp := totalProduced.Cmp(inputAmount); inputOutputCmp == 1 || inputOutputCmp == 2 {
+			return nil, fmt.Errorf(
+				"insuficient input in transaction, got %v want %v",
+				inputAmount,
+				totalProduced,
+			)
+		} else if inputOutputCmp == -1 {
+			return nil, fmt.Errorf(
+				"fee too small, got %v want %v",
+				tb.tx.Body.Fee,
+				inputAmount.Sub(totalProduced),
+			)
+		}
+	}
+
+	if tb.changeReceiver != nil {
+		err := tb.addChangeIfNeeded(inputAmount, outputAmount)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tb.build(); err != nil {
+		return nil, err
+	}
+
+	return tb.tx, nil
+}
+
+func (tb *TxBuilderV2) addChangeIfNeeded(inputAmount, outputAmount *Value) error {
+	// Temporary fee to serialize a valid transaction
+	tb.tx.Body.Fee = 2e5
+
+	// TODO: We should build a fake tx with hardcoded data like signatures, hashes, etc
+	if err := tb.build(); err != nil {
 		return err
 	}
 
@@ -95,7 +212,7 @@ func (tb *TxBuilderV2) AddChangeIfNeeded(changeAddr Address) error {
 
 	// Construct change output
 	changeAmount := inputAmount.Sub(outputAmount)
-	changeOutput := NewTxOutput(changeAddr, changeAmount)
+	changeOutput := NewTxOutput(*tb.changeReceiver, changeAmount)
 
 	changeMinCoins := tb.MinCoinsForTxOut(changeOutput)
 	if changeAmount.Coin < changeMinCoins {
@@ -132,167 +249,27 @@ func (tb *TxBuilderV2) AddChangeIfNeeded(changeAddr Address) error {
 	return nil
 }
 
-func (tb *TxBuilderV2) calculateAmounts() (*Value, *Value) {
-	input, output := NewValue(0), NewValue(tb.totalDeposits())
-	for _, in := range tb.tx.Body.Inputs {
-		input = input.Add(in.Amount)
-	}
-	for _, out := range tb.tx.Body.Outputs {
-		output = output.Add(out.Amount)
-	}
-	if tb.tx.Body.Mint != nil {
-		input = input.Add(NewValueWithAssets(0, tb.tx.Body.Mint.MultiAsset()))
-	}
-	return input, output
-}
-
-func (tb *TxBuilderV2) totalDeposits() Coin {
-	certs := tb.tx.Body.Certificates
-	var deposit Coin
-	if len(certs) != 0 {
-		for _, cert := range certs {
-			if cert.Type == StakeRegistration {
-				deposit += tb.protocol.KeyDeposit
-			}
-		}
-	}
-	return deposit
-}
-
-// MinFee computes the minimal fee required for the transaction.
-// This assumes that the inputs-outputs are defined and signing keys are present.
-func (tb *TxBuilderV2) MinFee() (Coin, error) {
-	// Set a temporary realistic fee in order to serialize a valid transaction
-	currentFee := tb.tx.Body.Fee
-	tb.tx.Body.Fee = 200000
-	if _, err := tb.build(); err != nil {
-		return 0, err
-	}
-	minFee := tb.calculateMinFee()
-	tb.tx.Body.Fee = currentFee
-	return minFee, nil
-}
-
-// MinCoinsForTxOut computes the minimal amount of coins required for a given transaction output.
-func (tb *TxBuilderV2) MinCoinsForTxOut(txOut *TxOutput) Coin {
-	var size uint
-	if txOut.Amount.OnlyCoin() {
-		size = 1
-	} else {
-		numAssets := txOut.Amount.MultiAsset.NumAssets()
-		assetsLength := txOut.Amount.MultiAsset.AssetsLength()
-		numPIDs := txOut.Amount.MultiAsset.NumPIDs()
-
-		size = 6 + uint(math.Floor(
-			float64(numAssets*12+assetsLength+numPIDs*28+7)/8,
-		))
-	}
-	return Coin(utxoEntrySizeWithoutVal+size) * tb.protocol.CoinsPerUTXOWord
-}
-
-// calculateMinFee computes the minimal fee required for the transaction.
-func (tb *TxBuilderV2) calculateMinFee() Coin {
-	txBytes := tb.tx.Bytes()
-	txLength := uint64(len(txBytes))
-	return tb.protocol.MinFeeA*Coin(txLength) + tb.protocol.MinFeeB
-}
-
-// Sign adds signing keys to create signatures for the witness set.
-func (tb *TxBuilderV2) Sign(privateKeys ...*edwards.PrivateKey) {
-	tb.pkeys = append(tb.pkeys, privateKeys...)
-}
-
-// Build creates a new transaction using the inputs, outputs and keys provided.
-func (tb *TxBuilderV2) Build() (*Tx, error) {
-	inputAmount, outputAmount := tb.calculateAmounts()
-	outputAmount = outputAmount.Add(NewValue(tb.tx.Body.Fee))
-
-	if inputOutputCmp := outputAmount.Cmp(inputAmount); inputOutputCmp == 1 || inputOutputCmp == 2 {
-		return nil, fmt.Errorf(
-			"insuficient input in transaction, got %v want %v",
-			inputAmount,
-			outputAmount,
-		)
-	} else if inputOutputCmp == -1 {
-		return nil, fmt.Errorf(
-			"fee too small, got %v want %v",
-			tb.tx.Body.Fee,
-			inputAmount.Sub(outputAmount),
-		)
-	}
-
-	return tb.build()
-}
-
-func (tb *TxBuilderV2) build() (*Tx, error) {
-	if len(tb.pkeys) == 0 {
-		return nil, errors.New("missing signing keys")
-	}
-
+func (tb *TxBuilderV2) build() error {
 	if err := tb.buildBody(); err != nil {
-		return nil, err
+		return err
 	}
 
 	txHash, err := tb.tx.Hash()
 	if err != nil {
-		return nil, err
+		return err
 	}
 
-	vkeyWitnsessSet := make([]VKeyWitness, len(tb.pkeys))
+	// Create witness set
+	tb.tx.WitnessSet.VKeyWitnessSet = make([]VKeyWitness, len(tb.pkeys))
 	for i, pkey := range tb.pkeys {
-		publicKey := pkey.PubKey()
-		sig, err := pkey.Sign(txHash[:])
-		if err != nil {
-			return nil, err
+		tb.tx.WitnessSet.VKeyWitnessSet[i] = VKeyWitness{
+			VKey:      pkey.PubKey(),
+			Signature: pkey.Sign(txHash),
 		}
-		signature := sig.Serialize()
-		witness := VKeyWitness{VKey: publicKey.Serialize(), Signature: signature}
-		vkeyWitnsessSet[i] = witness
 	}
-	tb.tx.WitnessSet.VKeyWitnessSet = vkeyWitnsessSet
 
-	return tb.tx, nil
+	return nil
 }
-
-///////// EDIT
-
-func (tb *TxBuilderV2) Build2() (*Tx, error) {
-	inputAmount, outputAmount := tb.calculateAmounts()
-	outputAmount = outputAmount.Add(NewValue(tb.tx.Body.Fee))
-
-	if inputOutputCmp := outputAmount.Cmp(inputAmount); inputOutputCmp == 1 || inputOutputCmp == 2 {
-		return nil, fmt.Errorf(
-			"insuficient input in transaction, got %v want %v",
-			inputAmount,
-			outputAmount,
-		)
-	} else if inputOutputCmp == -1 {
-		return nil, fmt.Errorf(
-			"fee too small, got %v want %v",
-			tb.tx.Body.Fee,
-			inputAmount.Sub(outputAmount),
-		)
-	}
-
-	return tb.build2()
-}
-
-func (tb *TxBuilderV2) build2() (*Tx, error) {
-	if err := tb.buildBody(); err != nil {
-		return nil, err
-	}
-
-	vkeyWitnsessSet := make([]VKeyWitness, 1)
-	for i := range tb.tx.Body.Inputs {
-		witness := VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
-		vkeyWitnsessSet[i] = witness
-	}
-	tb.tx.WitnessSet.VKeyWitnessSet = vkeyWitnsessSet
-
-	return tb.tx, nil
-}
-
-///////// END OF EDIT
 
 func (tb *TxBuilderV2) buildBody() error {
 	if tb.tx.AuxiliaryData != nil {
@@ -306,3 +283,57 @@ func (tb *TxBuilderV2) buildBody() error {
 	}
 	return nil
 }
+
+///////// EDIT
+
+func (tb *TxBuilderV2) Build2() (*Tx, error) {
+	inputAmount, outputAmount := tb.calculateAmounts()
+
+	// Check input-output value conservation
+	if tb.changeReceiver == nil {
+		totalProduced := outputAmount.Add(NewValue(tb.tx.Body.Fee))
+		if inputOutputCmp := totalProduced.Cmp(inputAmount); inputOutputCmp == 1 || inputOutputCmp == 2 {
+			return nil, fmt.Errorf(
+				"insuficient input in transaction, got %v want %v",
+				inputAmount,
+				totalProduced,
+			)
+		} else if inputOutputCmp == -1 {
+			return nil, fmt.Errorf(
+				"fee too small, got %v want %v",
+				tb.tx.Body.Fee,
+				inputAmount.Sub(totalProduced),
+			)
+		}
+	}
+
+	if tb.changeReceiver != nil {
+		err := tb.addChangeIfNeeded(inputAmount, outputAmount)
+		if err != nil {
+			return nil, err
+		}
+	}
+
+	if err := tb.build2(); err != nil {
+		return nil, err
+	}
+
+	return tb.tx, nil
+}
+
+func (tb *TxBuilderV2) build2() error {
+	if err := tb.buildBody(); err != nil {
+		return err
+	}
+
+	vkeyWitnsessSet := make([]VKeyWitness, 1)
+	for i := range tb.tx.Body.Inputs {
+		witness := VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
+		vkeyWitnsessSet[i] = witness
+	}
+	tb.tx.WitnessSet.VKeyWitnessSet = vkeyWitnsessSet
+
+	return nil
+}
+
+///////// END OF EDIT
