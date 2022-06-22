@@ -179,9 +179,9 @@ func (tb *TxBuilderV2) MinCoinsForTxOut(txOut *TxOutput) Coin {
 	if txOut.Amount.OnlyCoin() {
 		size = 1
 	} else {
-		numAssets := txOut.Amount.MultiAsset.NumAssets()
-		assetsLength := txOut.Amount.MultiAsset.AssetsLength()
-		numPIDs := txOut.Amount.MultiAsset.NumPIDs()
+		numAssets := txOut.Amount.MultiAsset.numAssets()
+		assetsLength := txOut.Amount.MultiAsset.assetsLength()
+		numPIDs := txOut.Amount.MultiAsset.numPIDs()
 
 		size = 6 + uint(math.Floor(
 			float64(numAssets*12+assetsLength+numPIDs*28+7)/8,
