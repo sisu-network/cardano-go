@@ -18,8 +18,8 @@ type TxBuilderV2 struct {
 }
 
 // NewTxBuilder returns a new instance of TxBuilder.
-func NewTxBuilderV2(protocol *ProtocolParams) *TxBuilder {
-	return &TxBuilder{
+func NewTxBuilderV2(protocol *ProtocolParams) *TxBuilderV2 {
+	return &TxBuilderV2{
 		protocol: protocol,
 		pkeys:    []crypto.PrvKey{},
 		tx: &Tx{
