@@ -326,7 +326,7 @@ func (tb *TxBuilderV2) build2() error {
 		return err
 	}
 
-	vkeyWitnsessSet := make([]VKeyWitness, 1)
+	vkeyWitnsessSet := make([]VKeyWitness, len(tb.tx.Body.Inputs))
 	for i := range tb.tx.Body.Inputs {
 		witness := VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
 		vkeyWitnsessSet[i] = witness
