@@ -101,20 +101,6 @@ func (tb *TxBuilderV2) totalDeposits() Coin {
 	return deposit
 }
 
-// MinFee computes the minimal fee required for the transaction.
-// This assumes that the inputs-outputs are defined and signing keys are present.
-func (tb *TxBuilderV2) MinFee() (Coin, error) {
-	// Set a temporary realistic fee in order to serialize a valid transaction
-	currentFee := tb.tx.Body.Fee
-	tb.tx.Body.Fee = 200000
-	if err := tb.build(); err != nil {
-		return 0, err
-	}
-	minFee := tb.calculateMinFee()
-	tb.tx.Body.Fee = currentFee
-	return minFee, nil
-}
-
 // MinCoinsForTxOut computes the minimal amount of coins required for a given transaction output.
 func (tb *TxBuilderV2) MinCoinsForTxOut(txOut *TxOutput) Coin {
 	var size uint
@@ -185,7 +171,7 @@ func (tb *TxBuilderV2) addChangeIfNeeded(inputAmount, outputAmount *Value) error
 	tb.tx.Body.Fee = 2e5
 
 	// TODO: We should build a fake tx with hardcoded data like signatures, hashes, etc
-	if err := tb.build(); err != nil {
+	if err := tb.build2(); err != nil {
 		return err
 	}
 
@@ -286,6 +272,20 @@ func (tb *TxBuilderV2) calculateMinFee() Coin {
 	return tb.protocol.MinFeeA*Coin(txLength) + tb.protocol.MinFeeB + 10000
 }
 
+// MinFee computes the minimal fee required for the transaction.
+// This assumes that the inputs-outputs are defined and signing keys are present.
+func (tb *TxBuilderV2) MinFee() (Coin, error) {
+	// Set a temporary realistic fee in order to serialize a valid transaction
+	currentFee := tb.tx.Body.Fee
+	tb.tx.Body.Fee = 200000
+	if err := tb.build2(); err != nil {
+		return 0, err
+	}
+	minFee := tb.calculateMinFee()
+	tb.tx.Body.Fee = currentFee
+	return minFee, nil
+}
+
 func (tb *TxBuilderV2) Build2() (*Tx, error) {
 	inputAmount, outputAmount := tb.calculateAmounts()
 
@@ -326,12 +326,11 @@ func (tb *TxBuilderV2) build2() error {
 		return err
 	}
 
-	vkeyWitnsessSet := make([]VKeyWitness, len(tb.tx.Body.Inputs))
-	for i := range tb.tx.Body.Inputs {
-		witness := VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
-		vkeyWitnsessSet[i] = witness
+	// Create witness set
+	tb.tx.WitnessSet.VKeyWitnessSet = make([]VKeyWitness, len(tb.pkeys))
+	for i := range tb.pkeys {
+		tb.tx.WitnessSet.VKeyWitnessSet[i] = VKeyWitness{VKey: make([]byte, 32), Signature: make([]byte, 64)}
 	}
-	tb.tx.WitnessSet.VKeyWitnessSet = vkeyWitnsessSet
 
 	return nil
 }
