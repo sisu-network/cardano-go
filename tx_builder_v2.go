@@ -132,13 +132,6 @@ func (tb *TxBuilderV2) MinCoinsForTxOut(txOut *TxOutput) Coin {
 	return Coin(utxoEntrySizeWithoutVal+size) * tb.protocol.CoinsPerUTXOWord
 }
 
-// calculateMinFee computes the minimal fee required for the transaction.
-func (tb *TxBuilderV2) calculateMinFee() Coin {
-	txBytes := tb.tx.Bytes()
-	txLength := uint64(len(txBytes))
-	return tb.protocol.MinFeeA*Coin(txLength) + tb.protocol.MinFeeB
-}
-
 // Sign adds signing keys to create signatures for the witness set.
 func (tb *TxBuilderV2) Sign(privateKeys ...crypto.PrvKey) {
 	tb.pkeys = append(tb.pkeys, privateKeys...)
@@ -285,6 +278,13 @@ func (tb *TxBuilderV2) buildBody() error {
 }
 
 ///////// EDIT
+
+// calculateMinFee computes the minimal fee required for the transaction.
+func (tb *TxBuilderV2) calculateMinFee() Coin {
+	txBytes := tb.tx.Bytes()
+	txLength := uint64(len(txBytes))
+	return tb.protocol.MinFeeA*Coin(txLength) + tb.protocol.MinFeeB + 10000
+}
 
 func (tb *TxBuilderV2) Build2() (*Tx, error) {
 	inputAmount, outputAmount := tb.calculateAmounts()
