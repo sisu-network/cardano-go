@@ -309,9 +309,10 @@ func Blake224Hash(b []byte) ([]byte, error) {
 }
 
 func getHrp(network Network) string {
-	if network == Testnet {
+	switch network {
+	case Testnet, Preprod:
 		return "addr_test"
-	} else {
+	default:
 		return "addr"
 	}
 }
